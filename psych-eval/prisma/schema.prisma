@@ -1,0 +1,342 @@
+// This is your Prisma schema file
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Management (Psychologists)
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Profile information
+  licenseNumber String?
+  organization  String?
+  phone         String?
+
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  students      Student[]
+  reports       Report[]
+  documents     Document[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// Student/Client Management
+model Student {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Demographics (encrypted sensitive data)
+  firstName       String
+  lastName        String
+  dateOfBirth     DateTime
+  grade           String?
+  school          String?
+  pronouns        String?
+  studentId       String? // School ID
+
+  // Contact Information
+  parentGuardianName   String?
+  parentPhone          String?
+  parentEmail          String?
+  emergencyContact     String?
+  emergencyPhone       String?
+
+  // Educational History
+  previousSchools      String? // JSON string
+  hasIEP               Boolean @default(false)
+  has504Plan           Boolean @default(false)
+
+  // Medical/Developmental
+  medicalHistory       String? // Encrypted text
+  developmentalHistory String? // Encrypted text
+  currentMedications   String? // Encrypted text
+  diagnoses            String? // JSON string
+
+  // Status
+  status String @default("active") // active, inactive, archived
+
+  // Relations
+  psychologistId String
+  psychologist   User   @relation(fields: [psychologistId], references: [id])
+
+  referrals    Referral[]
+  assessments  Assessment[]
+  reports      Report[]
+  documents    Document[]
+  timeline     TimelineEvent[]
+
+  @@index([psychologistId])
+  @@index([lastName, firstName])
+  @@map("students")
+}
+
+// Referral Tracking
+model Referral {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  studentId     String
+  student       Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  reason        String
+  source        String // teacher, parent, self-referral, etc.
+  referralDate  DateTime
+  consentSigned Boolean  @default(false)
+  consentDate   DateTime?
+  dueDate       DateTime?
+
+  status String @default("pending") // pending, in-progress, completed
+
+  @@index([studentId])
+  @@map("referrals")
+}
+
+// Assessment Tests
+model Assessment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  // Test Information
+  testType      String // WISC-V, WIAT-4, BASC-3, etc.
+  testDate      DateTime
+  testDomain    String // Cognitive, Achievement, Social-Emotional, etc.
+
+  // Scores (stored as JSON for flexibility)
+  scores        String // JSON: { subtests: [], composites: [], observations: "" }
+
+  // Behavioral Observations
+  observations  String?
+  rapport       String?
+  attention     String?
+  engagement    String?
+
+  // Status
+  completed Boolean @default(false)
+
+  @@index([studentId])
+  @@index([testType])
+  @@map("assessments")
+}
+
+// Normative Data Library
+model NormativeData {
+  id        String   @id @default(cuid())
+
+  testType     String
+  subtest      String
+  rawScore     Int
+  ageYears     Int
+  ageMonths    Int
+  standardScore Int
+  percentile   Int
+  ageEquivalent String?
+  gradeEquivalent String?
+
+  @@index([testType, subtest, rawScore])
+  @@map("normative_data")
+}
+
+// Report Generation
+model Report {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  psychologistId String
+  psychologist   User   @relation(fields: [psychologistId], references: [id])
+
+  // Report Details
+  reportType String // psychoeducational, special-ed, diagnostic, etc.
+  title      String
+
+  // Content (encrypted)
+  reasonForReferral    String?
+  backgroundInfo       String?
+  behavioralObs        String?
+  assessmentResults    String? // JSON with all test results
+  summary              String?
+  diagnosticImpressions String?
+  recommendations      String? // JSON array of recommendation IDs
+
+  // Status and Versioning
+  status   String @default("draft") // draft, in-review, final
+  version  Int    @default(1)
+
+  // Export
+  pdfUrl   String?
+
+  @@index([studentId])
+  @@index([psychologistId])
+  @@index([status])
+  @@map("reports")
+}
+
+// Report Templates
+model ReportTemplate {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name         String
+  reportType   String
+  description  String?
+
+  // Template Structure
+  structure    String // JSON: sections, headers, default content
+
+  isDefault Boolean @default(false)
+
+  @@map("report_templates")
+}
+
+// Recommendation Library
+model Recommendation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  title       String
+  description String
+  category    String // academic, behavioral, accommodations, etc.
+  tags        String // JSON array
+
+  // Metadata
+  evidenceBased Boolean @default(false)
+  ageRange      String? // e.g., "5-12"
+
+  @@index([category])
+  @@map("recommendations")
+}
+
+// Document Management
+model Document {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   User   @relation(fields: [uploadedById], references: [id])
+
+  // File Information
+  fileName     String
+  fileType     String // consent, medical-record, school-record, etc.
+  mimeType     String
+  fileSize     Int
+  filePath     String // Encrypted path
+
+  // Metadata
+  description  String?
+  tags         String? // JSON array
+
+  @@index([studentId])
+  @@index([uploadedById])
+  @@map("documents")
+}
+
+// Timeline/Workflow Tracking
+model TimelineEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  eventType   String // referral, consent, testing-scheduled, report-completed, etc.
+  title       String
+  description String?
+  eventDate   DateTime
+
+  @@index([studentId])
+  @@index([eventDate])
+  @@map("timeline_events")
+}
+
+// Audit Log for HIPAA Compliance
+model AuditLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  action       String // view, create, update, delete, export
+  resourceType String // student, report, document, etc.
+  resourceId   String
+  ipAddress    String?
+  userAgent    String?
+
+  // Additional details
+  details String? // JSON with specific changes
+
+  @@index([userId])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
